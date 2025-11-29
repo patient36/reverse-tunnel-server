@@ -1,0 +1,6 @@
+{
+  "json.schemas": [],
+  "[json]": {
+    "editor.defaultFormatter": "formulahendry.auto-rename-tag"
+  }
+}
