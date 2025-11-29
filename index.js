@@ -3,35 +3,12 @@ import fs from "fs";
 import crypto from "crypto";
 import http from "http";
 import https from "https";
+import path from "path";
 
 const app = express();
 const PORT = 8080;
 
-// Raw body collector for webhooks (Stripe)
-app.use((req, res, next) => {
-  let data = [];
-  req.on("data", chunk => data.push(chunk));
-  req.on("end", () => {
-    req.rawBody = Buffer.concat(data);
-    next();
-  });
-});
-
-app.use(express.json({ limit: "10mb" }));
-
-const DATA_FILE = "./tunnels.json";
-let tunnels = fs.existsSync(DATA_FILE)
-  ? JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
-  : {};
-
-function save() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(tunnels, null, 2));
-}
-
-function findExistingTunnel(target) {
-  return Object.entries(tunnels).find(([_, t]) => t.target === target);
-}
-
+app.use(express.json({}));
 app.post("/register", (req, res) => {
   const { target } = req.body;
 
@@ -60,6 +37,32 @@ app.post("/register", (req, res) => {
     target
   });
 });
+// Raw body collector for webhooks (Stripe)
+app.use((req, res, next) => {
+  let data = [];
+  req.on("data", chunk => data.push(chunk));
+  req.on("end", () => {
+    req.rawBody = Buffer.concat(data);
+    next();
+  });
+});
+
+app.use(express.json({ limit: "10mb" }));
+// Serve HTML dashboard
+app.use(express.static(path.join(process.cwd(), "public")));
+
+const DATA_FILE = "./tunnels.json";
+let tunnels = fs.existsSync(DATA_FILE)
+  ? JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
+  : {};
+
+function save() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(tunnels, null, 2));
+}
+
+function findExistingTunnel(target) {
+  return Object.entries(tunnels).find(([_, t]) => t.target === target);
+}
 
 function proxyRequest(req, res, targetUrl) {
   const client = targetUrl.startsWith("https") ? https : http;
@@ -103,6 +106,10 @@ app.all("/tunnel/:id", (req, res) => {
   }
 
   proxyRequest(req, res, tunnel.target);
+});
+
+app.get("/tunnels", (req, res) => {
+  res.json(tunnels);
 });
 
 app.listen(PORT, () => {

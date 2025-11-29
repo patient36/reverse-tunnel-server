@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Tunnel Manager</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      padding: 20px;
+      max-width: 900px;
+      margin: auto;
+      background: #f9f9f9;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    input,
+    button {
+      padding: 10px;
+      margin: 4px 0;
+      width: 100%;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #007bff;
+      color: white;
+      border: none;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      background: white;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.05);
+    }
+
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    th {
+      background: #f4f4f4;
+    }
+
+    .toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      z-index: 999;
+    }
+
+    .toast {
+      background: #333;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 6px;
+      opacity: 0;
+      transform: translateY(20px);
+      transition: all 0.3s ease;
+    }
+
+    .toast.show {
+      opacity: 0.9;
+      transform: translateY(0);
+    }
+
+    .pagination {
+      margin-top: 15px;
+      text-align: center;
+    }
+
+    .pagination button {
+      margin: 0 3px;
+      padding: 6px 10px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: white;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .pagination button.active {
+      background: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+
+    .action-btn {
+      margin-right: 5px;
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+
+    .edit-btn {
+      background: #ffc107;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+    }
+
+    .delete-btn {
+      background: #dc3545;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+    }
+
+    /* Custom modal */
+    #custom-dialog {
+      position: fixed;
+      top: 30%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: white;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      display: none;
+      z-index: 9999;
+      min-width: 300px;
+    }
+
+    #custom-dialog p {
+      margin: 0 0 15px 0;
+      font-size: 14px;
+    }
+
+    #custom-dialog .dialog-actions {
+      text-align: right;
+    }
+
+    #custom-dialog .dialog-actions button {
+      margin-left: 8px;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    #custom-dialog .ok-btn {
+      background: #007bff;
+      color: white;
+    }
+
+    #custom-dialog .cancel-btn {
+      background: #ccc;
+      color: #333;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Tunnel Manager</h1>
+
+  <div>
+    <input id="target" placeholder="Enter local URL (e.g. http://localhost:4000/webhook)">
+    <button onclick="createTunnel()">Create Tunnel</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Local Target</th>
+        <th>Public URL</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="tunnelsTable"></tbody>
+  </table>
+
+  <div class="pagination" id="pagination"></div>
+
+  <div class="toast-container"></div>
+
+  <!-- Custom dialog -->
+  <div id="custom-dialog">
+    <p id="dialog-message"></p>
+    <div class="dialog-actions">
+      <button class="cancel-btn" onclick="confirmDialog(false)">Cancel</button>
+      <button class="ok-btn" onclick="confirmDialog(true)">OK</button>
+    </div>
+  </div>
+
+  <script>
+    const toastContainer = document.querySelector('.toast-container');
+    const dialog = document.getElementById('custom-dialog');
+    const dialogMessage = document.getElementById('dialog-message');
+    let dialogCallback = null;
+
+    let tunnelsData = [];
+    const pageSize = 10;
+    let currentPage = 1;
+
+    function showToast(message, duration = 3000) {
+      const toast = document.createElement('div');
+      toast.className = 'toast show';
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+      }, duration);
+    }
+
+    function showDialog(message, callback) {
+      dialogMessage.textContent = message;
+      dialog.style.display = 'block';
+      dialogCallback = callback;
+    }
+
+    function confirmDialog(result) {
+      dialog.style.display = 'none';
+      if (dialogCallback) dialogCallback(result);
+      dialogCallback = null;
+    }
+
+    async function fetchTunnels() {
+      const res = await fetch('/tunnels');
+      tunnelsData = await res.json();
+      currentPage = 1;
+      renderTable();
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('tunnelsTable');
+      tbody.innerHTML = '';
+
+      const ids = Object.keys(tunnelsData);
+      const totalPages = Math.ceil(ids.length / pageSize);
+      const start = (currentPage - 1) * pageSize;
+      const end = start + pageSize;
+      const pageIds = ids.slice(start, end);
+
+      pageIds.forEach(id => {
+        const t = tunnelsData[id];
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${id}</td>
+          <td>${t.target}</td>
+          <td><a href="/tunnel/${id}" target="_blank">/tunnel/${id}</a></td>
+          <td>
+            <button class="action-btn edit-btn" onclick="editTunnel('${id}')">Edit</button>
+            <button class="action-btn delete-btn" onclick="deleteTunnel('${id}')">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      renderPagination(totalPages);
+    }
+
+    function renderPagination(totalPages) {
+      const pagination = document.getElementById('pagination');
+      pagination.innerHTML = '';
+
+      for (let i = 1; i <= totalPages; i++) {
+        const btn = document.createElement('button');
+        btn.textContent = i;
+        if (i === currentPage) btn.classList.add('active');
+        btn.onclick = () => { currentPage = i; renderTable(); };
+        pagination.appendChild(btn);
+      }
+    }
+
+    async function createTunnel() {
+      const target = document.getElementById('target').value;
+      if (!target) return showToast('Enter a local URL');
+
+      try {
+        const res = await fetch('/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target })
+        });
+        const data = await res.json();
+        showToast(data.message);
+        fetchTunnels();
+      } catch (err) {
+        showToast('Failed to create tunnel');
+      }
+    }
+
+    async function editTunnel(id) {
+      const newTarget = prompt('Enter new local URL', tunnelsData[id].target);
+      if (!newTarget) return;
+      try {
+        const res = await fetch(`/tunnels/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: newTarget })
+        });
+        const data = await res.json();
+        showToast(data.message);
+        fetchTunnels();
+      } catch {
+        showToast('Failed to edit tunnel');
+      }
+    }
+
+    function deleteTunnel(id) {
+      showDialog('Delete this tunnel?', async function (confirmed) {
+        if (!confirmed) return;
+        try {
+          const res = await fetch(`/tunnels/${id}`, { method: 'DELETE' });
+          const data = await res.json();
+          showToast(data.message);
+          fetchTunnels();
+        } catch {
+          showToast('Failed to delete tunnel');
+        }
+      });
+    }
+
+    fetchTunnels();
+  </script>
+</body>
+
+</html>
