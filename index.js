@@ -1,117 +1,168 @@
 import express from "express";
 import fs from "fs";
 import crypto from "crypto";
-import http from "http";
-import https from "https";
 import path from "path";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
-const PORT = 8080;
 
-app.use(express.json({}));
-app.post("/register", (req, res) => {
-  const { target } = req.body;
-
-  if (!target) {
-    return res.status(400).json({ message: "target is required" });
-  }
-
-  const dup = findExistingTunnel(target);
-  if (dup) {
-    const [id] = dup;
-    return res.json({
-      message: "Existing tunnel reused",
-      publicUrl: `http://localhost:${PORT}/tunnel/${id}`,
-      target
-    });
-  }
-
-  const id = crypto.randomBytes(4).toString("hex");
-
-  tunnels[id] = { target };
-  save();
-
-  res.json({
-    message: "Tunnel created",
-    publicUrl: `http://localhost:${PORT}/tunnel/${id}`,
-    target
-  });
-});
-// Raw body collector for webhooks (Stripe)
-app.use((req, res, next) => {
-  let data = [];
-  req.on("data", chunk => data.push(chunk));
-  req.on("end", () => {
-    req.rawBody = Buffer.concat(data);
-    next();
-  });
-});
-
-app.use(express.json({ limit: "10mb" }));
-// Serve HTML dashboard
-app.use(express.static(path.join(process.cwd(), "public")));
-
+const PORT = 8000;
 const DATA_FILE = "./tunnels.json";
+
 let tunnels = fs.existsSync(DATA_FILE)
   ? JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
   : {};
 
 function save() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(tunnels, null, 2));
+  fs.writeFileSync(
+    DATA_FILE,
+    JSON.stringify(tunnels, null, 2)
+  );
 }
 
 function findExistingTunnel(target) {
-  return Object.entries(tunnels).find(([_, t]) => t.target === target);
+  return Object.entries(tunnels)
+    .find(([_, tunnel]) => tunnel.target === target);
 }
 
-function proxyRequest(req, res, targetUrl) {
-  const client = targetUrl.startsWith("https") ? https : http;
 
-  const urlObj = new URL(targetUrl);
+// Dashboard/static files
+app.use(express.static(path.join(process.cwd(), "public")));
 
-  const options = {
-    hostname: urlObj.hostname,
-    port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
-    path: urlObj.pathname + urlObj.search,
-    method: req.method,
-    headers: {
-      ...req.headers,
-      host: urlObj.hostname
-    }
+
+// Register tunnel
+app.post("/register", express.json(), (req, res) => {
+  const { target } = req.body;
+
+  if (!target) {
+    return res.status(400).json({
+      message: "target is required",
+    });
+  }
+
+  const existing = findExistingTunnel(target);
+
+  if (existing) {
+    const [id] = existing;
+
+    return res.json({
+      message: "Existing tunnel reused",
+      publicUrl: `http://localhost:${PORT}/tunnel/${id}`,
+      target,
+    });
+  }
+
+
+  const id = crypto
+    .randomBytes(4)
+    .toString("hex");
+
+
+  tunnels[id] = {
+    target,
+    createdAt: new Date().toISOString(),
   };
 
-  const proxy = client.request(options, proxyRes => {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(res);
+  save();
+
+
+  res.json({
+    message: "Tunnel created",
+    publicUrl: `http://localhost:${PORT}/tunnel/${id}`,
+    target,
   });
-
-  proxy.on("error", err => {
-    res.status(500).json({ message: "Proxy failed", error: err.message });
-  });
-
-  // Write raw body for POST / PUT / PATCH
-  if (req.rawBody && req.rawBody.length > 0) {
-    proxy.write(req.rawBody);
-  }
-
-  proxy.end();
-}
-
-app.all("/tunnel/:id", (req, res) => {
-  const id = req.params.id;
-  const tunnel = tunnels[id];
-
-  if (!tunnel) {
-    return res.status(404).json({ message: "Tunnel not found" });
-  }
-
-  proxyRequest(req, res, tunnel.target);
 });
 
+
+// List tunnels
 app.get("/tunnels", (req, res) => {
   res.json(tunnels);
 });
 
+
+// Delete tunnel
+app.delete("/tunnels/:id", (req, res) => {
+  const { id } = req.params;
+
+  delete tunnels[id];
+
+  save();
+
+  res.json({
+    message: "Tunnel deleted",
+  });
+});
+
+
+// Update tunnel
+app.put("/tunnels/:id", express.json(), (req, res) => {
+  const { id } = req.params;
+  const { target } = req.body;
+
+  if (!tunnels[id]) {
+    return res.status(404).json({
+      message: "Tunnel not found",
+    });
+  }
+
+
+  tunnels[id].target = target;
+
+  save();
+
+
+  res.json({
+    message: "Tunnel updated",
+    tunnel: tunnels[id],
+  });
+});
+
+
+
+// Dynamic proxy
+app.use("/tunnel/:id", (req, res, next) => {
+
+  const { id } = req.params;
+
+  const tunnel = tunnels[id];
+
+
+  if (!tunnel) {
+    return res.status(404).json({
+      message: "Tunnel not found",
+    });
+  }
+
+
+  return createProxyMiddleware({
+
+    target: tunnel.target,
+
+    changeOrigin: true,
+
+    pathRewrite: {
+      [`^/tunnel/${id}`]: "",
+    },
+
+
+    // preserve webhook bodies
+    on: {
+      error(err, req, res) {
+        res.status(500).json({
+          message: "Proxy failed",
+          error: err.message,
+        });
+      },
+    },
+
+  })(req, res, next);
+
+});
+
+
+
 app.listen(PORT, () => {
-  console.log(`Tunnel server running on ${PORT}`);
+  console.log(
+    `Tunnel server running on http://localhost:${PORT}`
+  );
 });
